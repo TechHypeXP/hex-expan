@@ -7,6 +7,28 @@ import { loadCreatorsList, loadRuns } from "./registry.ts";
 
 const esc = (s: unknown) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
+// All timestamps are stored as real UTC ISO strings (Date.toISOString() at the moment each
+// event happened — never fabricated, see registry.ts). Display in Cairo local time (CAI) since
+// that's the user's actual timezone, alongside the raw UTC value for anyone reading this from
+// elsewhere. Uses the IANA Africa/Cairo zone via Intl rather than a hardcoded UTC+2/+3 offset,
+// so it stays correct through Egypt's DST rule changes automatically.
+const CAI_FORMAT = new Intl.DateTimeFormat("en-GB", {
+  timeZone: "Africa/Cairo",
+  year: "numeric", month: "2-digit", day: "2-digit",
+  hour: "2-digit", minute: "2-digit",
+  hour12: false,
+});
+function formatCai(iso: string): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return esc(iso); // fallback path — escape, never trust raw input into HTML
+  return CAI_FORMAT.format(d).replace(",", "") + " CAI";
+}
+function formatBoth(iso: string): string {
+  if (!iso) return "";
+  return `${formatCai(iso)} <span class="dim">(${esc(iso.slice(0, 16).replace("T", " "))} UTC)</span>`;
+}
+
 function main() {
   const creators = loadCreatorsList().sort((a, b) => b.last_score - a.last_score);
   const runs = loadRuns(20);
@@ -21,13 +43,13 @@ function main() {
 
   const creatorRow = (c: (typeof creators)[number]) => `<tr>
 <td><strong>${esc(c.handle_or_name)}</strong></td><td>${esc(c.platform)}</td><td>${esc(c.niche)}</td>
-<td class="score">${c.last_score}</td><td>${esc(c.last_seen_at.slice(0, 10))}</td>
+<td class="score">${c.last_score}</td><td>${formatBoth(c.last_seen_at)}</td>
 <td>${esc(c.scan_history.length)} scan(s)</td><td>${esc(c.status_note)}</td>
 <td><a href="${esc(c.scan_history[0]?.evidence_url ?? "")}">source</a></td>
 </tr>`;
 
   const runRow = (r: (typeof runs)[number]) => `<tr>
-<td>${esc(r.run_id)}</td><td>${esc(r.niches.join(", "))}</td><td>${r.raw_hit_count}</td><td>${r.candidate_count}</td>
+<td>${formatCai(r.started_at)}</td><td>${esc(r.niches.join(", "))}</td><td>${r.raw_hit_count}</td><td>${r.candidate_count}</td>
 <td>${r.incomplete_run ? `⚠️ <span class="dim">${esc(r.incomplete_reasons.join("; "))}</span>` : "✅"}</td>
 <td>${r.dropped_by_hard_filter_count}</td>
 </tr>`;
@@ -45,7 +67,7 @@ a{color:#58a6ff;text-decoration:none}a:hover{text-decoration:underline}
 .empty{color:#8b949e;font-style:italic;padding:12px 0}
 </style></head><body>
 <h1>Creator Registry — what's new, what's been worked</h1>
-<div class="meta">${creators.length} creators tracked across ${runs.length} logged run(s) · data/db/creators.json + data/db/runs.jsonl</div>
+<div class="meta">Generated ${formatCai(new Date().toISOString())} · ${creators.length} creators tracked across ${runs.length} logged run(s) · data/db/creators.json + data/db/runs.jsonl</div>
 
 <h2>New — not yet reviewed <span class="count">${byStatus.new.length}</span></h2>
 ${byStatus.new.length ? `<table><thead><tr><th>Creator</th><th>Platform</th><th>Niche</th><th>Score</th><th>Last seen</th><th>History</th><th>Note</th><th>Evidence</th></tr></thead><tbody>${byStatus.new.map(creatorRow).join("")}</tbody></table>` : `<div class="empty">Nothing new.</div>`}
@@ -63,7 +85,7 @@ ${byStatus.converted.length ? `<table><thead><tr><th>Creator</th><th>Platform</t
 ${byStatus.declined.length ? `<table><thead><tr><th>Creator</th><th>Platform</th><th>Niche</th><th>Score</th><th>Last seen</th><th>History</th><th>Note</th><th>Evidence</th></tr></thead><tbody>${byStatus.declined.map(creatorRow).join("")}</tbody></table>` : `<div class="empty">None yet.</div>`}
 
 <h2>Run history (last ${runs.length})</h2>
-<table><thead><tr><th>Run</th><th>Niches</th><th>Raw hits</th><th>Candidates</th><th>Complete?</th><th>Dropped by hard filter</th></tr></thead><tbody>${runs.map(runRow).join("")}</tbody></table>
+<table><thead><tr><th>Started (CAI)</th><th>Niches</th><th>Raw hits</th><th>Candidates</th><th>Complete?</th><th>Dropped by hard filter</th></tr></thead><tbody>${runs.map(runRow).join("")}</tbody></table>
 
 <p class="dim" style="margin-top:32px">To change a creator's status: edit their entry's "status" field directly in data/db/creators.json (valid values: new, reviewed, contacted, declined, converted), or use setCreatorStatus() from registry.ts. No mutation UI yet — this page is read-only.</p>
 </body></html>`;
