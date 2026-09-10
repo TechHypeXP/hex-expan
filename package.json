@@ -1,0 +1,41 @@
+{
+  "name": "hex-expan",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "harvest": "tsx harvest.ts",
+    "score": "tsx score.ts",
+    "scrape": "tsx getinsight_id_br.ts",
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "report": "tsx report.ts",
+    "creator-scan": "tsx creator_scan.ts",
+    "registry-report": "tsx registry_report.ts",
+    "transcribe": "tsx transcribe.ts"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "packageManager": "pnpm@12.3.4+sha512.961aa41fb077da3a04a441d9f8e15ebc0c96da8ef710b2eb67bf9ee7cb0610eabd48f1fd85f51cffe73846785fa0f87c56a3a872a1d893f8446741b5cce45457",
+  "devEngines": {
+    "packageManager": {
+      "name": "pnpm",
+      "version": "^12.3.4",
+      "onFail": "download"
+    }
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
+  },
+  "type": "module",
+  "dependencies": {
+    "cheerio": "^1.2.0",
+    "dotenv": "^17.4.2"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2",
+    "tsx": "^4.23.13"
+  }
+}

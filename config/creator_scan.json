@@ -1,0 +1,19 @@
+{
+  "niches": ["business coaching", "personal finance", "fitness training", "self-improvement", "creative skills"],
+  "followerMin": 10000,
+  "followerMax": 150000,
+  "activityWindowDays": 60,
+  "countryFilter": "US",
+  "language": "English",
+  "defaultN": 20,
+  "cacheTtlHours": 6,
+  "braveRateLimitMs": 1100,
+  "instagramRateLimitMs": 500,
+  "decodoFetchDelayMs": 800,
+  "exaNumResults": 12,
+  "exaTextMaxChars": 500,
+  "braveNicheResultCount": 10,
+  "braveContactHuntResultCount": 6,
+  "promptTextExcerptMaxChars": 1000,
+  "structuringModel": "x-ai/grok-4.3"
+}

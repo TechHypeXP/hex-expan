@@ -1,0 +1,13 @@
+.env
+node_modules/
+data/
+*.log
+ideabrowser_vault.json
+
+# Raw capture media (multi-GB video/audio) — never belongs in git, regenerable via yt-dlp/transcribe.ts
+downloads/
+*.part
+*.ytdl
+
+# Pipeline-generated machine artifact (GLM output, consumed by score.ts) — not source, regenerated per run
+candidates.json
