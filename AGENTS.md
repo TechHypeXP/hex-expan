@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Trend-harvest + digital-product qualification pipeline. Flat repo, no git init (intentional — do not `git init` without asking). TypeScript-only, run via tsx. No test suite.
+Trend-harvest + digital-product qualification pipeline. Flat repo, public GitHub repo since 2026-09-10 (`github.com/TechHypeXP/hex-expan` — public because CodeRabbit/Cubic PR-review tools need it on their free tiers; `.env`, `data/`, `downloads/` all gitignored). TypeScript-only, run via tsx. No test suite.
 
 ## Commands
 
@@ -12,8 +12,19 @@ pnpm transcribe -- --watch    # live/one-shot whisper transcription via OpenRout
 pnpm creator-scan             # micro-creator finder: Exa+Brave discovery (YouTube+Instagram) -> real-stat verify -> contact hunt
                                #   tunables (niches, follower band, activity window, rate limits, model) live in
                                #   config/creator_scan.json, not hardcoded — pass --config=<path> to override
+pnpm registry-report          # data/db/{runs.jsonl,creators.json} -> data/db/registry_report.html (New/Reviewed/Contacted/Converted view)
 pnpm scrape                   # getinsight_id_br.ts (ideabrowser deferred; kept for Whop/Gumroad targets)
 ```
+
+## Scheduled scanning (since 2026-09-10)
+
+`scripts/scheduled_creator_scan.sh`, installed via crontab (`0 */4 * * *`), runs
+`creator-scan` + `registry-report` on a ramped cadence: 6x/day (every 4h) for the
+first 4 days since first fire (tracked in `data/db/.scan_schedule_start`), then
+drops to 1x/day at 09:00 Cairo time. Logs to `data/db/scheduled_scan.log`. Chosen
+because `trendFreshnessHours` (config/creator_scan.json) is 6h, so a 4h cadence
+never wastes a SerpAPI call, and 24 runs over 4 days gives a real multi-run sample
+of the trend-filtered pipeline's hit rate before settling into steady state.
 
 OpenRouter also serves Speech-to-Text: `POST /api/v1/audio/transcriptions`, JSON body `{model: "openai/whisper-large-v3-turbo[:nitro]", input_audio: {data: <base64>, format: "mp3"|"wav"|...}}` — ~$0.012/audio-hour. Growing yt-dlp `.part` files are ffmpeg-readable mid-stream (live transcription possible).
 
