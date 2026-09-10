@@ -11,3 +11,6 @@ downloads/
 
 # Pipeline-generated machine artifact (GLM output, consumed by score.ts) — not source, regenerated per run
 candidates.json
+
+# Compiled Typst output — regenerable from .typ source, don't track binaries
+typst_prototype/*.pdf
