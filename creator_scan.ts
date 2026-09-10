@@ -1,23 +1,30 @@
 // creator_scan.ts — multi-source one-pager: scan for US micro-creator MVP test candidates
 // run via `pnpm creator-scan -- --n=20`
 //
-// Two engines, two different jobs (per user direction 2026-09-09 — not "fire everything
-// at everything," each engine does what it's actually good at). Niches are a fixed hardcoded
-// list (see pickNiches() below) — SerpAPI google_trends was tried for niche selection and
-// dropped as the wrong signal (trend breakouts are news spikes, not evergreen creator niches).
+// Two discovery engines, two different jobs (per user direction 2026-09-09 — not "fire
+// everything at everything," each engine does what it's actually good at):
 //   1. Exa neural search — WHO: semantic discovery of creator profile/channel/media-kit pages
-//      matching the qualitative criteria, per niche.
+//      matching the qualitative criteria, per niche+trending-topic.
 //   2. Brave web search — CORROBORATE: keyword search for directory/listicle/explicit-contact
-//      pages in the same niche, catches what neural search misses.
-// Decodo + Bright Data are deliberately NOT used here — they fetch a URL you already have or
-// proxy raw HTML; they're per-candidate verification tools (Phase 3 style), not discovery
-// engines. Wiring them into discovery would just burn quota for no differentiated signal.
+//      pages in the same niche+topic, catches what neural search misses.
+// Decodo + Bright Data are deliberately NOT used for discovery — they fetch a URL you already
+// have or proxy raw HTML; they're per-candidate verification tools (Phase 3 style / contact
+// enrichment), not discovery engines. Wiring them into discovery would just burn quota for no
+// differentiated signal.
+//
+// Niche selection was a fixed hardcoded list until 2026-09-10 — SerpAPI google_trends was tried
+// once and dropped as "the wrong signal" on the assumption that trend breakouts are only news
+// spikes. That assumption was wrong per user direction: the fix isn't avoiding trends, it's
+// filtering them — see trends.ts, which classifies real trending topics against the stable
+// evergreen niche taxonomy (config.niches) and only keeps genuine teachable sub-angles, logging
+// everything (kept and discarded) to data/db/trends.jsonl as a permanent, growing asset.
 import { writeFileSync, mkdirSync, existsSync, readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { promisify } from "node:util";
 import path from "node:path";
 import dotenv from "dotenv";
 import { appendRun, upsertCreators } from "./registry.ts";
+import { getTrendingNiches } from "./trends.ts";
 
 dotenv.config({ override: true });
 
@@ -44,6 +51,7 @@ interface CreatorScanConfig {
   braveContactHuntResultCount: number;
   promptTextExcerptMaxChars: number;
   structuringModel: string;
+  trendFreshnessHours: number;
 }
 
 const CONFIG_DEFAULTS: CreatorScanConfig = {
@@ -64,6 +72,7 @@ const CONFIG_DEFAULTS: CreatorScanConfig = {
   braveContactHuntResultCount: 6,
   promptTextExcerptMaxChars: 1000,
   structuringModel: "x-ai/grok-4.3",
+  trendFreshnessHours: 6,
 };
 
 function loadConfig(): CreatorScanConfig {
@@ -197,26 +206,32 @@ who do NOT appear to already sell a digital product (no visible store link, no "
 course mentioned). Must have a public business contact method. Must be active recently
 (posted/uploaded within ~${CONFIG.activityWindowDays} days). ${CONFIG.language}-language content only.`;
 
-// --- Stage 1: niche list. (Tried SerpAPI google_trends_trending_now here first — dropped it:
-// trends breakouts are news/search-interest spikes ("UK investors withdraw billions"), not
-// evergreen creator niches. Wrong signal for this job. Registry-configured list instead
-// (config.niches); revisit only if a cleaner trends-to-niche mapping is designed later.)
-function pickNiches(): string[] {
-  return CONFIG.niches;
+// --- Stage 1: niche+topic selection (redesigned 2026-09-10, per user direction) ---
+// CONFIG.niches is the STABLE evergreen taxonomy (barely changes). Real trending topics from
+// SerpAPI google_trends_trending_now are classified against that taxonomy in trends.ts — a topic
+// only survives if it's a genuine teachable sub-angle within one of these niches, not raw
+// breaking news. Every classified topic (kept AND discarded) is permanently logged to
+// data/db/trends.jsonl — that ledger is the actual accumulating asset, not any single run.
+// Falls back to the niche name itself as the topic if no fresh trend exists for it — never
+// returns fewer niches than requested, never silently drops a niche because trends failed.
+async function pickNichesWithTrends(): Promise<{ pairs: { niche: string; topic: string }[]; usedFallbackFor: string[] }> {
+  return getTrendingNiches(CONFIG.niches, CONFIG.trendFreshnessHours);
 }
 
-// --- Stage 2: Exa neural — semantic creator-profile discovery, per niche ---
+// --- Stage 2: Exa neural — semantic creator-profile discovery, per niche+topic ---
 // Neural search matches page-content-like statements, not instruction paragraphs — a criteria
 // checklist as the query returns garbage (verified 2026-09-09: same irrelevant hit for two
-// different niches). Phrase it as a statement describing the target page instead.
-async function fetchExaForNiche(niche: string): Promise<RawHit[]> {
-  const query = `This is a recent YouTube video from a ${niche} content creator's channel. The
-creator has roughly ${CONFIG.followerMin.toLocaleString()} to ${CONFIG.followerMax.toLocaleString()} subscribers, is based in the ${CONFIG.countryFilter}, and does not
+// different niches). Phrase it as a statement describing the target page instead. `topic` sharpens
+// the query to today's actual trending angle within the niche (falls back to the niche name
+// itself when no fresh trend was found — see pickNichesWithTrends above).
+async function fetchExaForNiche(niche: string, topic: string): Promise<RawHit[]> {
+  const query = `This is a recent YouTube video from a ${niche} content creator's channel, related
+to "${topic}". The creator has roughly ${CONFIG.followerMin.toLocaleString()} to ${CONFIG.followerMax.toLocaleString()} subscribers, is based in the ${CONFIG.countryFilter}, and does not
 yet sell any digital product, book, or course of their own.`;
   // Raw `text` on YouTube channel pages returns generic nav chrome (JS-hydrated page, nothing
   // useful in static HTML) — verified 2026-09-09, zero candidates survived structuring as a
   // result. `summary` uses Exa's own extraction against a targeted question instead.
-  const res = await cachedFetch(`exa:creator-scan:v3:${niche}`, TTL_6H, () =>
+  const res = await cachedFetch(`exa:creator-scan:v4:${niche}:${topic}`, TTL_6H, () =>
     postJson<{ results?: { url: string; title?: string; text?: string; summary?: string }[] }>(
       "https://api.exa.ai/search",
       { "x-api-key": process.env.EXA_API_KEY ?? "" },
@@ -237,7 +252,7 @@ yet sell any digital product, book, or course of their own.`;
     return [];
   }
   const results = (res as { results?: { url: string; title?: string; text?: string; summary?: string }[] }).results ?? [];
-  console.log(`==> [exa:${niche}] ${results.length} hits. First summary: "${(results[0]?.summary ?? "(none)").slice(0, 200)}..."`);
+  console.log(`==> [exa:${niche} | ${topic}] ${results.length} hits. First summary: "${(results[0]?.summary ?? "(none)").slice(0, 200)}..."`);
   return results.map((r) => ({ source: "exa" as const, niche, url: r.url, title: r.title, text: r.text, summary: r.summary, video_id: extractVideoId(r.url) }));
 }
 
@@ -246,10 +261,10 @@ yet sell any digital product, book, or course of their own.`;
 // subscribers" + "business inquiries") returned Brave's own "bad_results":true with zero
 // matches — nobody's page literally contains that exact combination of phrases. Loosened to
 // real keywords instead of brittle exact-phrase stacking.
-async function fetchBraveForNiche(niche: string): Promise<RawHit[]> {
-  const q = encodeURIComponent(`${niche} youtube channel business email contact collab -site:youtube.com/results`);
+async function fetchBraveForNiche(niche: string, topic: string): Promise<RawHit[]> {
+  const q = encodeURIComponent(`${niche} ${topic} youtube channel business email contact collab -site:youtube.com/results`);
   const url = `https://api.search.brave.com/res/v1/web/search?q=${q}&count=${CONFIG.braveNicheResultCount}`;
-  const res = await cachedFetch(`brave:creator-scan:v2:${niche}`, TTL_6H, async () => {
+  const res = await cachedFetch(`brave:creator-scan:v3:${niche}:${topic}`, TTL_6H, async () => {
     const primary = await getJson<{ web?: { results?: { url: string; title?: string; description?: string }[] } }>(url, { "X-Subscription-Token": process.env.BRAVE_API_KEY ?? "" });
     if ("error" in (primary as object)) {
       return getJson(url, { "X-Subscription-Token": process.env.BRAVE_API_KEY_BACKUP ?? "" });
@@ -285,11 +300,11 @@ function extractInstagramHandle(url: string): string | undefined {
   return handle;
 }
 
-async function fetchExaForNicheInstagram(niche: string): Promise<RawHit[]> {
+async function fetchExaForNicheInstagram(niche: string, topic: string): Promise<RawHit[]> {
   const query = `This is a recent Instagram post or reel from a ${niche} content creator's
-profile. The creator has roughly ${CONFIG.followerMin.toLocaleString()} to ${CONFIG.followerMax.toLocaleString()} followers, is based in the ${CONFIG.countryFilter},
+profile, related to "${topic}". The creator has roughly ${CONFIG.followerMin.toLocaleString()} to ${CONFIG.followerMax.toLocaleString()} followers, is based in the ${CONFIG.countryFilter},
 and does not yet sell any digital product, book, or course of their own.`;
-  const res = await cachedFetch(`exa:creator-scan-ig:v1:${niche}`, TTL_6H, () =>
+  const res = await cachedFetch(`exa:creator-scan-ig:v2:${niche}:${topic}`, TTL_6H, () =>
     postJson<{ results?: { url: string; title?: string; text?: string; summary?: string }[] }>(
       "https://api.exa.ai/search",
       { "x-api-key": process.env.EXA_API_KEY ?? "" },
@@ -310,7 +325,7 @@ and does not yet sell any digital product, book, or course of their own.`;
     return [];
   }
   const results = (res as { results?: { url: string; title?: string; text?: string; summary?: string }[] }).results ?? [];
-  console.log(`==> [exa-ig:${niche}] ${results.length} hits. First summary: "${(results[0]?.summary ?? "(none)").slice(0, 200)}..."`);
+  console.log(`==> [exa-ig:${niche} | ${topic}] ${results.length} hits. First summary: "${(results[0]?.summary ?? "(none)").slice(0, 200)}..."`);
   return results.map((r) => ({ source: "exa" as const, niche, url: r.url, title: r.title, text: r.text, summary: r.summary }));
 }
 
@@ -756,20 +771,24 @@ async function main() {
   // meta so a bad run is visibly bad, not silently mistaken for "no qualified creators."
   const incompleteReasons: string[] = [];
 
-  console.log(`==> Stage 1/4: niches...`);
-  const niches = pickNiches();
-  console.log(`==> niches: ${niches.join(", ")}`);
+  console.log(`==> Stage 1/4: niches + today's trending topics within them...`);
+  const { pairs: nicheTopics, usedFallbackFor } = await pickNichesWithTrends();
+  const niches = nicheTopics.map((nt) => nt.niche);
+  console.log(`==> niches: ${nicheTopics.map((nt) => `${nt.niche} (${nt.topic === nt.niche ? "no fresh trend, using niche name" : `trending: "${nt.topic}"`})`).join(" | ")}`);
+  if (usedFallbackFor.length > 0) {
+    incompleteReasons.push(`no fresh trending topic found for: ${usedFallbackFor.join(", ")} — fell back to niche name as query topic`);
+  }
 
   console.log(`==> Stage 2/4: Exa neural (YouTube + Instagram, parallel) + Brave keyword (serialized) search across ${niches.length} niches...`);
   // Exa has no tight per-second cap, safe to fan out. Brave's free tier is 1 req/sec
   // (x-ratelimit-policy: 1;w=1) — firing all niches in parallel 429s everything past the first
   // (verified 2026-09-09). Serialize with a stagger instead of racing the rate limit.
-  const exaYtHits = await Promise.all(niches.map((niche) => fetchExaForNiche(niche)));
-  const exaIgHits = await Promise.all(niches.map((niche) => fetchExaForNicheInstagram(niche)));
+  const exaYtHits = await Promise.all(nicheTopics.map(({ niche, topic }) => fetchExaForNiche(niche, topic)));
+  const exaIgHits = await Promise.all(nicheTopics.map(({ niche, topic }) => fetchExaForNicheInstagram(niche, topic)));
   const braveHits: RawHit[][] = [];
-  for (const niche of niches) {
-    const hits = await fetchBraveForNiche(niche);
-    if (hits.length === 0) incompleteReasons.push(`brave niche "${niche}" returned 0 hits (rate-limit, key failure, or genuinely no results — see console log)`);
+  for (const { niche, topic } of nicheTopics) {
+    const hits = await fetchBraveForNiche(niche, topic);
+    if (hits.length === 0) incompleteReasons.push(`brave niche "${niche}" (topic "${topic}") returned 0 hits (rate-limit, key failure, or genuinely no results — see console log)`);
     braveHits.push(hits);
     await new Promise((r) => setTimeout(r, CONFIG.braveRateLimitMs));
   }
