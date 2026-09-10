@@ -269,8 +269,15 @@ async function fetchBraveForNiche(niche: string): Promise<RawHit[]> {
 // to instagram.com instead. Exa's static-page extraction on IG profile pages is thinner than on
 // YouTube (IG is more aggressively JS-hydrated), so `summary` (Exa's own targeted extraction) is
 // the primary signal here, same as the YouTube path — `text` is kept short-and-best-effort.
+// Fixed 2026-09-10 after first live run: the prior regex only matched bare profile URLs
+// (instagram.com/handle/), so it silently extracted ZERO handles from the far more common shape
+// Exa actually returns for a reel-targeted query — instagram.com/handle/reel/<id>/ — which has
+// content after the handle segment, not end-of-string. 59 real Instagram URLs came back from
+// that run and 0 got verified because of this. Now matches the handle whether it's followed by
+// end-of-string, a query/hash, or another path segment (reel/p/etc.), and still rejects bare
+// reel/explore/etc. URLs that have no handle in them at all (e.g. instagram.com/reel/<id>/).
 function extractInstagramHandle(url: string): string | undefined {
-  const m = url.match(/instagram\.com\/([a-zA-Z0-9._]+)\/?(?:$|[?#])/);
+  const m = url.match(/instagram\.com\/([a-zA-Z0-9._]+)(?:\/|$|\?|#)/);
   if (!m) return undefined;
   const handle = m[1];
   // Reserved IG path segments that are not profile handles.
