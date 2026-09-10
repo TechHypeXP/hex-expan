@@ -103,6 +103,40 @@ async function fetchSerpTrends(): Promise<
   );
 }
 
+// Source 2 (added 2026-09-10, per user direction: "go directly to the platforms and use the
+// trends pages"). YouTube's actual trending page has no public scrape-friendly static markup
+// (same JS-rendering problem documented for Instagram profiles in creator_scan.ts) — but the
+// YouTube Data API's videos.list?chart=mostPopular is the OFFICIAL, legitimate equivalent: it's
+// literally what youtube.com/feed/trending is generated from, served as clean JSON, no scraping,
+// no ToS risk, and we already pay for/use this API key. Instagram has NO equivalent — no public
+// trending API, and scraping their Explore page hits the identical JS-app-shell wall already
+// confirmed for profile pages (see creator_scan.ts's fetchInstagramProfilePublicParse comment).
+// Do not attempt to scrape Instagram's Explore page until that underlying problem has a real
+// fix (paid JS-rendering vendor) — building a second broken scraper for the same reason isn't
+// useful. Third-in-sequence platform trending pages (TikTok, etc.) are a future addition once
+// this two-source version proves useful, not built speculatively now.
+async function fetchYoutubeTrendingTopics(): Promise<{ query: string; search_volume?: number; increase_percentage?: number; categories?: { name: string }[] }[]> {
+  const key = process.env.YOUTUBE_API_KEY;
+  if (!key) {
+    console.log(`==> [trends] YOUTUBE_API_KEY not set — skipping YouTube trending source`);
+    return [];
+  }
+  const res = await cachedFetch("trends:youtube:mostpopular:US", TTL_6H, () =>
+    getJson<{ items?: { snippet?: { title?: string; categoryId?: string } }[] }>(
+      `https://www.googleapis.com/youtube/v3/videos?part=snippet&chart=mostPopular&regionCode=US&maxResults=25&key=${key}`
+    )
+  );
+  if ("error" in res) {
+    console.error(`==> [trends] YouTube trending fetch failed:`, res.error);
+    return [];
+  }
+  const items = res.items ?? [];
+  return items
+    .map((i) => i.snippet?.title)
+    .filter((t): t is string => !!t)
+    .map((title) => ({ query: title }));
+}
+
 // One LLM call classifies ALL pulled topics at once against the evergreen taxonomy — cheap and
 // avoids N separate calls. Strict by design: a topic only survives if there's a genuine teachable
 // angle for a creator in that niche, not just superficial keyword overlap. News events (a war, a
@@ -173,37 +207,49 @@ export async function getTrendingNiches(
 
   const missing = niches.filter((n) => !byNiche.has(n));
   if (missing.length > 0) {
-    console.log(`==> [trends] ${byNiche.size}/${niches.length} niches have a fresh (<${freshnessHours}h) logged trend; fetching live trends for the rest...`);
-    const raw = await fetchSerpTrends();
-    if (!("error" in raw)) {
-      const items = raw.trending_searches ?? [];
-      if (items.length > 0) {
-        const classified = await classifyTopicsAgainstNiches(items.slice(0, 20), niches);
-        const now = new Date().toISOString();
-        const itemByQuery = new Map(items.map((i) => [i.query, i]));
-        appendTrendEntries(
-          classified.map((c) => {
-            const src = itemByQuery.get(c.topic);
-            return {
-              ts: now,
-              source: "serpapi_trends",
-              raw_topic: c.topic,
-              search_volume: src?.search_volume,
-              increase_percentage: src?.increase_percentage,
-              categories: src?.categories?.map((cat) => cat.name),
-              niche: c.niche,
-              kept: !!c.niche,
-              reason: c.reason,
-            };
-          })
-        );
-        for (const c of classified) if (c.niche && !byNiche.has(c.niche)) byNiche.set(c.niche, c.topic);
-        console.log(`==> [trends] classified ${classified.length} live topics -> ${classified.filter((c) => c.niche).length} kept, ${classified.filter((c) => !c.niche).length} discarded (logged to ${TRENDS_LOG})`);
-      } else {
-        console.log(`==> [trends] SerpAPI trends returned no usable topics this call`);
-      }
+    console.log(`==> [trends] ${byNiche.size}/${niches.length} niches have a fresh (<${freshnessHours}h) logged trend; fetching live trends for the rest (SerpAPI, then YouTube's official trending chart, in sequence)...`);
+
+    // Two sources, sequenced as requested — SerpAPI (broad US search-breakout signal) first,
+    // then YouTube's own trending chart (platform-native signal). Tag each item by source so the
+    // ledger records where a kept topic actually came from.
+    const sourced: { query: string; search_volume?: number; increase_percentage?: number; categories?: { name: string }[]; source: string }[] = [];
+
+    const serp = await fetchSerpTrends();
+    if (!("error" in serp)) {
+      const items = serp.trending_searches ?? [];
+      if (items.length > 0) sourced.push(...items.slice(0, 20).map((i) => ({ ...i, source: "serpapi_trends" })));
+      else console.log(`==> [trends] SerpAPI trends returned no usable topics this call`);
     } else {
-      console.error(`==> [trends] SerpAPI trends fetch failed:`, raw.error);
+      console.error(`==> [trends] SerpAPI trends fetch failed:`, serp.error);
+    }
+
+    const ytTopics = await fetchYoutubeTrendingTopics();
+    if (ytTopics.length > 0) sourced.push(...ytTopics.slice(0, 25).map((i) => ({ ...i, source: "youtube_trending" })));
+
+    if (sourced.length > 0) {
+      const classified = await classifyTopicsAgainstNiches(sourced, niches);
+      const now = new Date().toISOString();
+      const itemByQuery = new Map(sourced.map((i) => [i.query, i]));
+      appendTrendEntries(
+        classified.map((c) => {
+          const src = itemByQuery.get(c.topic);
+          return {
+            ts: now,
+            source: src?.source ?? "unknown",
+            raw_topic: c.topic,
+            search_volume: src?.search_volume,
+            increase_percentage: src?.increase_percentage,
+            categories: src?.categories?.map((cat) => cat.name),
+            niche: c.niche,
+            kept: !!c.niche,
+            reason: c.reason,
+          };
+        })
+      );
+      for (const c of classified) if (c.niche && !byNiche.has(c.niche)) byNiche.set(c.niche, c.topic);
+      console.log(`==> [trends] classified ${classified.length} live topics (${sourced.filter((s) => s.source === "serpapi_trends").length} SerpAPI + ${sourced.filter((s) => s.source === "youtube_trending").length} YouTube) -> ${classified.filter((c) => c.niche).length} kept, ${classified.filter((c) => !c.niche).length} discarded (logged to ${TRENDS_LOG})`);
+    } else {
+      console.log(`==> [trends] no topics from either source this call`);
     }
   }
 
