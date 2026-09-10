@@ -332,12 +332,30 @@ function parseFollowerCount(raw: string): number | undefined {
   return Math.round(n * mult);
 }
 
+// KNOWN BROKEN as of the 2026-09-10 live run — verified against real fetched HTML, not
+// theoretical: Instagram now serves a ~620KB JS-app-shell page (bare <title>Instagram</title>,
+// no og:description/og:title meta tags) to unauthenticated/proxy fetches for EVERY handle tested
+// (6/6 real URLs from that run). The og:description-parse approach this function was built on
+// assumed the old static-meta behavior IG used to expose logged-out — that assumption is now
+// false. Every call currently returns null (logged below, not silently swallowed). Real fix
+// requires either an authenticated IG session/cookie jar, a paid scraping API tier that handles
+// JS rendering (Decodo's scraper-api product, already in the stack, is the natural next try), or
+// accepting IG follower counts as LLM-snippet-estimated only (same honesty tier as unverified
+// YouTube hits) until one of those is built. Do not remove this function or pretend it works —
+// leave it wired so it starts working for free the moment IG's page behavior changes back, and
+// so the log line below makes the gap visible instead of a silent zero.
 async function fetchInstagramProfileStats(handle: string): Promise<Record<string, unknown> | null> {
   try {
     const html = await cachedFetch(`ig:profile:${handle}`, TTL_6H, () => fetchPageHtml(`https://www.instagram.com/${handle}/`));
-    if (!html || html.length < 200) return null;
+    if (!html || html.length < 200) {
+      console.log(`==> [ig-verify:${handle}] page fetch returned ${html?.length ?? 0} bytes — unusable`);
+      return null;
+    }
     const ogDesc = html.match(/<meta property="og:description" content="([^"]*)"/)?.[1];
-    if (!ogDesc) return null;
+    if (!ogDesc) {
+      console.log(`==> [ig-verify:${handle}] no og:description in ${html.length}-byte response — IG served the JS app shell, not static profile markup (known gap, see comment above)`);
+      return null;
+    }
     const parts = ogDesc.match(/^([\d,.KM]+)\s*Followers,\s*([\d,.KM]+)\s*Following,\s*([\d,.KM]+)\s*Posts/i);
     const followerCount = parts ? parseFollowerCount(parts[1]) : undefined;
     const bioEmails = [...new Set((html.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g) ?? []).filter((e) => !EMAIL_JUNK.test(e)))];
@@ -727,11 +745,20 @@ async function main() {
   );
   // Instagram profile fetches go through the same Decodo residential proxy as contact-hunt —
   // no per-second published rate limit documented, but stagger anyway to stay a polite scraper.
+  let igVerifiedCount = 0;
   for (const [hit, handle] of igHandleByHit) {
     const stats = await fetchInstagramProfileStats(handle);
     hit.channel_meta = stats;
-    if (stats) console.log(`==> [ig:${handle}] followerCount=${stats.followerCount ?? "unparsed"} · storeSignal=${stats.storeSignalDetected}`);
+    if (stats) {
+      igVerifiedCount++;
+      console.log(`==> [ig:${handle}] followerCount=${stats.followerCount ?? "unparsed"} · storeSignal=${stats.storeSignalDetected}`);
+    }
     await new Promise((r) => setTimeout(r, CONFIG.instagramRateLimitMs));
+  }
+  if (igHandleByHit.size > 0 && igVerifiedCount === 0) {
+    incompleteReasons.push(`Instagram verification returned 0/${igHandleByHit.size} results — IG is likely serving JS-app-shell pages instead of static profile markup to this fetch method (see fetchInstagramProfileStats comment); all IG follower/store data this run is LLM-snippet-estimated only, not real`);
+  } else if (igVerifiedCount < igHandleByHit.size) {
+    incompleteReasons.push(`Instagram verification partial: ${igVerifiedCount}/${igHandleByHit.size} handles returned real stats`);
   }
 
   console.log(`==> Stage 4/4: structuring + scoring candidates against criteria...`);
