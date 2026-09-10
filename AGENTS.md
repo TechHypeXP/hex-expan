@@ -57,6 +57,7 @@ pnpm exec esbuild harvest.ts --outfile=/dev/null   # repeat for any changed .ts
 ## Secrets
 
 - `.env` holds all API keys; `.env`, `data/`, `ideabrowser_vault.json` are gitignored. Keep it that way.
+- `HIKERAPI_API_KEY` (optional) — Instagram verification cascade tier 2 in `creator_scan.ts` (paid, pay-per-request, ~$0.60-$1.00/1K, no subscription). Only fires if this key is set; unset = tier 1 (free public-page parse, currently broken — IG serves a JS app shell) is the only attempt, degrading to "unknown - verify manually" same as before. Endpoint/schema unverified against a live key — confirm against hikerapi.com docs before first real use.
 - Last verified engine status (2026-09-08, final): **all 5 OK** — Sonar (OpenRouter), Grok (grok-4.3 + web plugin), SerpAPI trends (free plan = 250 searches/mo), Exa, Brave. OpenRouter key validated via `GET /api/v1/auth/key`; SerpAPI via `serpapi.com/account`. First fully-green run: `data/run_2026-09-08T16-32-28-278Z/` (317 trends + grounded LLM payloads). Cache-hit behavior verified across consecutive runs.
 
 ## Pipeline discipline

@@ -344,7 +344,7 @@ function parseFollowerCount(raw: string): number | undefined {
 // YouTube hits) until one of those is built. Do not remove this function or pretend it works —
 // leave it wired so it starts working for free the moment IG's page behavior changes back, and
 // so the log line below makes the gap visible instead of a silent zero.
-async function fetchInstagramProfileStats(handle: string): Promise<Record<string, unknown> | null> {
+async function fetchInstagramProfilePublicParse(handle: string): Promise<Record<string, unknown> | null> {
   try {
     const html = await cachedFetch(`ig:profile:${handle}`, TTL_6H, () => fetchPageHtml(`https://www.instagram.com/${handle}/`));
     if (!html || html.length < 200) {
@@ -368,11 +368,65 @@ async function fetchInstagramProfileStats(handle: string): Promise<Record<string
       descriptionEmail: bioEmails[0],
       storeSignalDetected: storeSignal, // real fetched-HTML evidence for no_existing_product
       activityRecent: undefined, // no post-timestamp data available from this static parse
+      verificationSource: "public-parse",
     };
   } catch (err) {
     console.error(`==> [ig-verify:${handle}] fetch failed:`, String((err as Error).message).slice(0, 100));
     return null;
   }
+}
+
+// Tier 2 fallback (added 2026-09-10, per user direction: "add it as a cascade module") — HikerAPI
+// is a paid, Instagram-specialized, pay-per-request API (~$0.60-$1.00/1K requests, no
+// subscription, per this session's vendor research). ONLY fires when HIKERAPI_API_KEY is set in
+// .env — absent key means this tier is skipped entirely, so nothing spends money by accident.
+// Endpoint/response shape below is HikerAPI's documented user-by-username lookup as of this
+// session's research; CONFIRM against https://hikerapi.com's current docs before relying on this
+// in a real paid run — schema drift on a third-party API is a real risk and this has not been
+// tested against a live key yet.
+async function fetchInstagramProfileViaHikerApi(handle: string): Promise<Record<string, unknown> | null> {
+  const key = process.env.HIKERAPI_API_KEY;
+  if (!key) return null;
+  const res = await cachedFetch(`hikerapi:user:${handle}`, TTL_6H, () =>
+    getJson<{ follower_count?: number; following_count?: number; biography?: string; public_email?: string; is_business?: boolean; country?: string }>(
+      `https://api.hikerapi.com/v1/user/by/username?username=${encodeURIComponent(handle)}`,
+      { "x-access-key": key }
+    )
+  );
+  if ("error" in (res as object)) {
+    console.error(`==> [ig-hikerapi:${handle}] failed:`, (res as { error: string }).error);
+    return null;
+  }
+  const u = res as { follower_count?: number; biography?: string; public_email?: string; country?: string };
+  if (typeof u.follower_count !== "number") {
+    console.log(`==> [ig-hikerapi:${handle}] response had no follower_count — schema may have drifted, check HikerAPI docs`);
+    return null;
+  }
+  const bioEmails = u.biography ? [...new Set((u.biography.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g) ?? []).filter((e) => !EMAIL_JUNK.test(e)))] : [];
+  const storeSignal = u.biography ? /linktr\.ee|linkin\.bio|shop\b|store\b|course\b/i.test(u.biography) : false;
+  return {
+    igHandle: handle,
+    channelTitle: handle,
+    country: u.country ?? "unknown",
+    followerCount: u.follower_count,
+    descriptionEmail: u.public_email ?? bioEmails[0],
+    storeSignalDetected: storeSignal,
+    activityRecent: undefined, // this endpoint's user-lookup doesn't return recent-post timestamps
+    verificationSource: "hikerapi",
+  };
+}
+
+// Cascade entry point — this is what callers use. Tier 1 (free) first, Tier 2 (paid, gated on
+// key presence) only if Tier 1 comes back empty. Add further tiers (e.g. a confirmed Decodo
+// Instagram-template product) by inserting another `if (!result) result = await ...` step here —
+// keep the cascade shape, don't fork call sites.
+async function fetchInstagramProfileStats(handle: string): Promise<Record<string, unknown> | null> {
+  let result = await fetchInstagramProfilePublicParse(handle);
+  if (!result && process.env.HIKERAPI_API_KEY) {
+    console.log(`==> [ig-verify:${handle}] public-parse tier failed, falling back to HikerAPI...`);
+    result = await fetchInstagramProfileViaHikerApi(handle);
+  }
+  return result;
 }
 
 // --- Stage 2.5: real channel stats via YouTube Data API v3 (2026-09-09) ---
