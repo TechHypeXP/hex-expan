@@ -41,7 +41,7 @@ pnpm exec esbuild harvest.ts --outfile=/dev/null   # repeat for any changed .ts
 ## Intel layer
 
 - `data/intel/` — human-distilled strategy documents (`intel_gadzhi_summit_day3.md`: micro-creator distribution model, operator playbook, VRE framing; `intel_gadzhi_summit_day4.md`: funnel-hacking method, upsell math, one-day cash machine, picks-and-shovels framing). Derived from recorded live streams (`downloads/day*/transcript_*.md` via `pnpm transcribe`). Full session-continuity doc: `data/intel/session_handover_2026-09-09.md`.
-- Candidate class "creator-shelf products" (B2B2C via micro-creators) proposed 2026-09-08 — pending user decision on price-band exception ($97–$300) before adding to candidates.json. Day-4 intel adds proposed schema fields: `upsell_companion`, `funnel_type`.
+- An additional candidate class was proposed 2026-09-08 — pending a pricing-band decision before adding to candidates.json; proposed schema fields (`upsell_companion`, `funnel_type`) noted in day-4 intel. Full rationale kept in `data/intel/` (gitignored, not in this public repo).
 - `data/intel/engine_thesis_handover.md` §10 has a fact-checked review of an external ("CCW") critique and a ranked 10x plan. No Phase 4 script exists yet — it's a spec, not shipped code. Real bug found there: Phase 2 generates template-clone candidates ("[X] Tracker" vs "[X] Ledger") that pass Jaccard dedup because they're genuinely different tokens — fix belongs in the Phase 2 prompt (diversity constraint), not in score.ts's dedup logic.
 
 ## Hard-won quirks
